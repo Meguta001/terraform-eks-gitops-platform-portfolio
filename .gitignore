@@ -52,3 +52,24 @@ terraform.rc
 
 # Ignore lock files in reusable child modules
 /modules/**/.terraform.lock.hcl
+
+
+# -----------------------------------------
+# Sensitive local files
+# -----------------------------------------
+
+# Environment variables and local secrets
+.env
+.env.*
+!.env.example
+
+# Local Terraform backend configuration
+**/backend.hcl
+
+# Private keys and certificates
+*.pem
+*.p12
+*.pfx
+*.key
+id_rsa
+id_ed25519
