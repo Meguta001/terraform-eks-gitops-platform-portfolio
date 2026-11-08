@@ -1,0 +1,19 @@
+
+# Argo CD Helm Chart 10.11.6
+# Argo CD appVersion v3.5.6
+
+server:
+  service:
+    type: ClusterIP
+
+# SSO連携は現在の工程では使用しない
+dex:
+  enabled: false
+
+# 通知は監視工程で検討
+notifications:
+  enabled: false
+
+# ApplicationSetは今回使わない
+applicationSet:
+  replicas: 0

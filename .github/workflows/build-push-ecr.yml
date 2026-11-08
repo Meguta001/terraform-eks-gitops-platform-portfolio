@@ -1,0 +1,111 @@
+
+name: Build and Push App to ECR
+
+# Reference workflow for the public portfolio.
+# Requires AWS OIDC and repository secrets.
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: ecr-build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-push:
+    name: Docker Build and ECR Push
+    if: github.ref == 'refs/heads/main'
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      AWS_REGION: ap-northeast-1
+      ECR_REPOSITORY: eks-gitops-platform-dev-app
+
+    steps:
+      # 1. Checkout
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # 2. Docker Build
+      - name: Build Docker image
+        run: |
+          docker build \
+            --platform linux/amd64 \
+            --pull \
+            --tag sample-app:test \
+            ./app
+
+      # 3. Container smoke test
+      - name: Smoke test
+        run: |
+          docker run -d \
+            --name sample-app-ci \
+            -p 127.0.0.1:18080:8080 \
+            sample-app:test
+
+          trap 'docker rm -f sample-app-ci >/dev/null 2>&1 || true' EXIT
+
+          for i in $(seq 1 15); do
+            if curl --fail --silent \
+              http://127.0.0.1:18080/health \
+              | grep -q '"status": "ok"'; then
+              echo "Health check succeeded"
+              exit 0
+            fi
+
+            sleep 1
+          done
+
+          docker logs sample-app-ci
+          exit 1
+
+      # 4. GitHub OIDC -> AWS STS
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          allowed-account-ids: ${{ secrets.AWS_ACCOUNT_ID }}
+          role-session-name: GitHubActionsECRPush
+
+      # 5. Verify AWS identity and ECR
+      - name: Verify AWS access
+        env:
+          EXPECTED_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+        shell: bash
+        run: |
+          actual_account="$(aws sts get-caller-identity --query Account --output text)"
+          test "$actual_account" = "$EXPECTED_ACCOUNT_ID"
+
+          aws ecr describe-repositories \
+            --repository-names "$ECR_REPOSITORY" \
+            --query 'repositories[].repositoryName' \
+            --output text
+
+          echo "AWS identity and ECR verified"
+
+      # 6. Docker Login to ECR
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # 7. Tag and Push
+      - name: Tag and push Docker image
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          IMAGE_TAG="sha-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          IMAGE_URI="${REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
+
+          docker tag sample-app:test "$IMAGE_URI"
+          docker push "$IMAGE_URI"
+
+          echo "Image pushed successfully to ECR"
+          echo "Image pushed successfully to ECR" >> "$GITHUB_STEP_SUMMARY"
